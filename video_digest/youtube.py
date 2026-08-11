@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -273,8 +274,9 @@ class YouTubeTranscriptAdapter:
                 transcript_is_generated=track.get("kind") == "asr",
             )
 
-        segments = tuple(_segments_from_json3(caption))
+        segments, has_untimed_text = _segments_from_json3(caption)
         if not segments:
+            content_failure = _caption_content_failure(has_untimed_text=has_untimed_text)
             return EvidenceBundle(
                 metadata=metadata,
                 segments=(),
@@ -283,12 +285,18 @@ class YouTubeTranscriptAdapter:
                 transcript_is_generated=track.get("kind") == "asr",
                 completeness="partial",
                 media_downloaded=False,
-                failure=DigestFailure(
-                    stage="subtitles",
-                    code="caption_empty",
-                    message="The selected caption track did not contain usable text.",
-                    retryable=False,
-                ),
+                failure=content_failure,
+            )
+        if has_untimed_text:
+            return EvidenceBundle(
+                metadata=metadata,
+                segments=segments,
+                transcript_source="youtube_caption",
+                transcript_language=_optional_text(track.get("languageCode")),
+                transcript_is_generated=track.get("kind") == "asr",
+                completeness="partial",
+                media_downloaded=False,
+                failure=_caption_content_failure(has_untimed_text=True),
             )
         return EvidenceBundle(
             metadata=metadata,
@@ -327,23 +335,72 @@ def _choose_track(
     raise ValueError("The video has no caption tracks")
 
 
-def _segments_from_json3(payload: dict[str, Any]) -> list[TranscriptSegment]:
+def _segments_from_json3(
+    payload: dict[str, Any],
+) -> tuple[tuple[TranscriptSegment, ...], bool]:
     segments: list[TranscriptSegment] = []
-    for event in payload.get("events", []):
-        text = "".join(str(part.get("utf8") or "") for part in event.get("segs", []))
+    has_untimed_text = False
+    events = payload.get("events", [])
+    if not isinstance(events, list):
+        return (), False
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        raw_parts = event.get("segs", [])
+        if not isinstance(raw_parts, list):
+            continue
+        text = "".join(str(part.get("utf8") or "") for part in raw_parts if isinstance(part, dict))
         text = re.sub(r"\s+", " ", html.unescape(text)).strip()
         if not text:
             continue
-        start = float(event.get("tStartMs") or 0) / 1000
-        duration = float(event.get("dDurationMs") or 0) / 1000
+        timing = _json3_timing(event)
+        if timing is None:
+            has_untimed_text = True
+            continue
+        start, end = timing
         segments.append(
             TranscriptSegment(
                 start_seconds=start,
-                end_seconds=start + duration,
+                end_seconds=end,
                 text=text,
             )
         )
-    return segments
+    return tuple(segments), has_untimed_text
+
+
+def _json3_timing(event: dict[str, Any]) -> tuple[float, float] | None:
+    if "tStartMs" not in event or "dDurationMs" not in event:
+        return None
+    try:
+        start_milliseconds = float(event["tStartMs"])
+        duration_milliseconds = float(event["dDurationMs"])
+    except (TypeError, ValueError):
+        return None
+    if (
+        not math.isfinite(start_milliseconds)
+        or not math.isfinite(duration_milliseconds)
+        or start_milliseconds < 0
+        or duration_milliseconds <= 0
+    ):
+        return None
+    start_seconds = start_milliseconds / 1000
+    return start_seconds, start_seconds + (duration_milliseconds / 1000)
+
+
+def _caption_content_failure(*, has_untimed_text: bool) -> DigestFailure:
+    if has_untimed_text:
+        return DigestFailure(
+            stage="subtitles",
+            code="caption_timestamps_missing",
+            message="Some caption text did not include reliable start and end times.",
+            retryable=False,
+        )
+    return DigestFailure(
+        stage="subtitles",
+        code="caption_empty",
+        message="The selected caption track did not contain usable text.",
+        retryable=False,
+    )
 
 
 def _tracks_from_ytdlp(info: dict[str, Any], video_id: str) -> list[dict[str, Any]]:

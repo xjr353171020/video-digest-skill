@@ -3,16 +3,51 @@ from __future__ import annotations
 from typing import Any
 
 from video_digest import (
+    DigestFailure,
     DigestRecommendation,
     DigestResult,
     DigestRunStatus,
     DigestWorkflow,
+    EvidenceBundle,
+    TranscriptSegment,
+    VideoMetadata,
     VideoRequest,
     WatchSegment,
     YouTubeGatewayFailure,
     YouTubeTranscriptAdapter,
     YtDlpYouTubeGateway,
 )
+
+
+class ControlledEvidenceAdapter:
+    def fetch(self, request: VideoRequest) -> EvidenceBundle:
+        assert request.url == "https://www.youtube.com/watch?v=demo123"
+        return EvidenceBundle(
+            metadata=VideoMetadata(
+                video_id="demo123",
+                title="A concise demo",
+                channel="Demo Channel",
+                duration_seconds=600,
+                canonical_url="https://www.youtube.com/watch?v=demo123",
+            ),
+            segments=(
+                TranscriptSegment(
+                    start_seconds=0.0,
+                    end_seconds=3.0,
+                    text="The first useful point.",
+                ),
+                TranscriptSegment(
+                    start_seconds=120.0,
+                    end_seconds=124.0,
+                    text="The decisive example appears here.",
+                ),
+            ),
+            transcript_source="youtube_caption",
+            transcript_language="en",
+            transcript_is_generated=False,
+            completeness="complete",
+            media_downloaded=False,
+        )
 
 
 class StubYouTubeGateway:
@@ -111,6 +146,59 @@ class EmptyCaptionYouTubeGateway(StubYouTubeGateway):
         return {"events": []}
 
 
+class PartiallyUntimedCaptionYouTubeGateway(StubYouTubeGateway):
+    def load_caption(self, track_url: str) -> dict[str, Any]:
+        assert track_url == "https://captions.example/en"
+        return {
+            "events": [
+                {
+                    "dDurationMs": 2_000,
+                    "segs": [{"utf8": "This event has no start time."}],
+                },
+                {
+                    "tStartMs": 30_000,
+                    "segs": [{"utf8": "This event has no duration."}],
+                },
+                {
+                    "tStartMs": 60_000,
+                    "dDurationMs": 3_000,
+                    "segs": [{"utf8": "This event has reliable timing."}],
+                },
+            ]
+        }
+
+
+class PartialEvidenceAdapter:
+    def fetch(self, request: VideoRequest) -> EvidenceBundle:
+        return EvidenceBundle(
+            metadata=VideoMetadata(
+                video_id="demo123",
+                title="A partial demo",
+                channel="Demo Channel",
+                duration_seconds=300,
+                canonical_url=request.url,
+            ),
+            segments=(
+                TranscriptSegment(
+                    start_seconds=60.0,
+                    end_seconds=63.0,
+                    text="Only this section had reliable timing.",
+                ),
+            ),
+            transcript_source="youtube_caption",
+            transcript_language="en",
+            transcript_is_generated=False,
+            completeness="partial",
+            media_downloaded=False,
+            failure=DigestFailure(
+                stage="subtitles",
+                code="caption_timestamps_missing",
+                message="Some caption events did not include reliable timing.",
+                retryable=False,
+            ),
+        )
+
+
 class StubYtDlpBackend:
     def inspect(self, video_url: str) -> dict[str, Any]:
         assert video_url == "https://www.youtube.com/watch?v=demo123"
@@ -185,7 +273,7 @@ class TranslationHeavyYtDlpBackend:
 
 def test_user_gets_timestamped_digest_without_media_downloads() -> None:
     workflow = DigestWorkflow(
-        adapter=YouTubeTranscriptAdapter(StubYouTubeGateway()),
+        adapter=ControlledEvidenceAdapter(),
         summarizer=EvidenceBasedSummarizer(),
     )
 
@@ -209,6 +297,19 @@ def test_user_gets_timestamped_digest_without_media_downloads() -> None:
     assert run.evidence.media_downloaded is False
     assert run.digest is not None
     assert run.digest.one_sentence_conclusion == "The first useful point."
+    assert run.digest.core_points == (
+        "The first useful point.",
+        "The decisive example appears here.",
+    )
+    assert run.digest.watch_segments == (
+        WatchSegment(
+            start_seconds=120.0,
+            end_seconds=124.0,
+            reason="The decisive example",
+        ),
+    )
+    assert run.digest.information_density == 8
+    assert run.digest.worth_watching == 7
     assert run.digest.recommendation is DigestRecommendation.SUMMARY_IS_ENOUGH
     assert run.digest.estimated_minutes_saved == 8
 
@@ -248,6 +349,45 @@ def test_user_gets_partial_result_when_caption_track_is_empty() -> None:
     assert run.failure is not None
     assert run.failure.stage == "subtitles"
     assert run.failure.code == "caption_empty"
+
+
+def test_user_gets_partial_result_when_some_caption_timestamps_are_missing() -> None:
+    workflow = DigestWorkflow(
+        adapter=YouTubeTranscriptAdapter(PartiallyUntimedCaptionYouTubeGateway()),
+        summarizer=FailIfSummarized(),
+    )
+
+    run = workflow.run(VideoRequest(url="https://www.youtube.com/watch?v=demo123"))
+
+    assert run.status is DigestRunStatus.PARTIAL
+    assert run.evidence is not None
+    assert run.evidence.segments == (
+        TranscriptSegment(
+            start_seconds=60.0,
+            end_seconds=63.0,
+            text="This event has reliable timing.",
+        ),
+    )
+    assert run.evidence.completeness == "partial"
+    assert run.digest is None
+    assert run.failure is not None
+    assert run.failure.stage == "subtitles"
+    assert run.failure.code == "caption_timestamps_missing"
+
+
+def test_partial_evidence_with_segments_is_not_promoted_to_a_completed_digest() -> None:
+    workflow = DigestWorkflow(
+        adapter=PartialEvidenceAdapter(),
+        summarizer=FailIfSummarized(),
+    )
+
+    run = workflow.run(VideoRequest(url="https://www.youtube.com/watch?v=demo123"))
+
+    assert run.status is DigestRunStatus.PARTIAL
+    assert run.evidence is not None
+    assert len(run.evidence.segments) == 1
+    assert run.digest is None
+    assert run.failure is run.evidence.failure
 
 
 def test_user_gets_digest_through_the_production_ytdlp_gateway() -> None:

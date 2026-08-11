@@ -20,7 +20,11 @@ class DigestWorkflow:
 
     def run(self, request: VideoRequest) -> DigestRun:
         evidence = self._adapter.fetch(request)
-        if not evidence.segments:
+        if (
+            not evidence.segments
+            or evidence.completeness != "complete"
+            or evidence.failure is not None
+        ):
             return DigestRun(
                 status=DigestRunStatus.PARTIAL,
                 request=request,
