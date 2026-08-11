@@ -17,6 +17,20 @@ class DigestRecommendation(str, Enum):
     SKIP = "skip"
 
 
+class EvidenceAttemptStatus(str, Enum):
+    SUCCEEDED = "succeeded"
+    UNAVAILABLE = "unavailable"
+    FAILED = "failed"
+
+
+class EvidenceCacheStatus(str, Enum):
+    MISS = "miss"
+    REVALIDATE = "revalidation_required"
+    HIT = "hit"
+    INVALID = "invalid"
+    STORED = "stored"
+
+
 @dataclass(frozen=True)
 class VideoRequest:
     url: str
@@ -41,11 +55,52 @@ class TranscriptSegment:
 
 
 @dataclass(frozen=True)
+class CaptionTrack:
+    identifier: str
+    language_code: str
+    display_name: str
+    is_generated: bool
+    is_original: bool
+
+
+@dataclass(frozen=True)
 class DigestFailure:
     stage: str
     code: str
     message: str
     retryable: bool
+    exit_status: int | None = None
+    stderr_summary: str | None = None
+
+
+@dataclass(frozen=True)
+class EvidenceAttempt:
+    source: str
+    stage: str
+    status: EvidenceAttemptStatus
+    code: str | None
+    message: str | None
+    retryable: bool
+    exit_status: int | None = None
+    stderr_summary: str | None = None
+
+
+@dataclass(frozen=True)
+class EvidenceArtifact:
+    run_id: str
+    artifact_id: str
+    kind: str
+    source: str
+    content_sha256: str
+    complete: bool
+
+
+@dataclass(frozen=True)
+class EvidenceCacheInfo:
+    status: EvidenceCacheStatus
+    key: str
+    basis: str
+    content_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +113,10 @@ class EvidenceBundle:
     completeness: str
     media_downloaded: bool
     failure: DigestFailure | None = None
+    run_id: str | None = None
+    attempts: tuple[EvidenceAttempt, ...] = ()
+    artifacts: tuple[EvidenceArtifact, ...] = ()
+    cache: EvidenceCacheInfo | None = None
 
 
 @dataclass(frozen=True)

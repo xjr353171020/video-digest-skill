@@ -12,7 +12,16 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from .domain import DigestFailure, EvidenceBundle, TranscriptSegment, VideoMetadata, VideoRequest
+from .caption_selection import choose_caption_track
+from .diagnostics import sanitize_external_diagnostic
+from .domain import (
+    CaptionTrack,
+    DigestFailure,
+    EvidenceBundle,
+    TranscriptSegment,
+    VideoMetadata,
+    VideoRequest,
+)
 
 
 class YouTubeGateway(Protocol):
@@ -29,12 +38,16 @@ class YouTubeGatewayFailure(RuntimeError):
         code: str,
         message: str,
         retryable: bool,
+        exit_status: int | None = None,
+        stderr_summary: str | None = None,
     ) -> None:
         super().__init__(message)
         self.stage = stage
         self.code = code
         self.message = message
         self.retryable = retryable
+        self.exit_status = exit_status
+        self.stderr_summary = stderr_summary
 
 
 class YtDlpBackend(Protocol):
@@ -49,9 +62,42 @@ class YtDlpBackend(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class YtDlpCommandRunner(Protocol):
+    def run(
+        self,
+        command: list[str],
+        timeout_seconds: float,
+    ) -> subprocess.CompletedProcess[str]: ...
+
+
+class DefaultYtDlpCommandRunner:
+    def run(
+        self,
+        command: list[str],
+        timeout_seconds: float,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            command,
+            capture_output=True,
+            check=False,
+            encoding="utf-8",
+            errors="replace",
+            text=True,
+            timeout=timeout_seconds,
+        )
+
+
 class SubprocessYtDlpBackend:
-    def __init__(self, *, timeout_seconds: float = 90.0) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = 90.0,
+        runner: YtDlpCommandRunner | None = None,
+        temporary_root: Path | None = None,
+    ) -> None:
         self._timeout_seconds = timeout_seconds
+        self._runner = runner or DefaultYtDlpCommandRunner()
+        self._temporary_root = temporary_root
 
     def inspect(self, video_url: str) -> dict[str, Any]:
         completed = self._run(
@@ -70,6 +116,8 @@ class SubprocessYtDlpBackend:
                 code="metadata_parse_failed",
                 message="yt-dlp returned metadata in an unexpected format. Update the lockfile and retry.",
                 retryable=True,
+                exit_status=completed.returncode,
+                stderr_summary=sanitize_external_diagnostic(completed.stderr),
             ) from error
         if not isinstance(payload, dict):
             raise YouTubeGatewayFailure(
@@ -77,6 +125,8 @@ class SubprocessYtDlpBackend:
                 code="metadata_parse_failed",
                 message="yt-dlp returned metadata in an unexpected format. Update the lockfile and retry.",
                 retryable=True,
+                exit_status=completed.returncode,
+                stderr_summary=sanitize_external_diagnostic(completed.stderr),
             )
         return payload
 
@@ -87,10 +137,13 @@ class SubprocessYtDlpBackend:
         *,
         is_generated: bool,
     ) -> dict[str, Any]:
-        with tempfile.TemporaryDirectory(prefix="video-digest-caption-") as temporary_directory:
+        with tempfile.TemporaryDirectory(
+            prefix="video-digest-caption-",
+            dir=self._temporary_root,
+        ) as temporary_directory:
             output_template = str(Path(temporary_directory) / "%(id)s.%(ext)s")
             subtitle_flag = "--write-auto-subs" if is_generated else "--write-subs"
-            self._run(
+            completed = self._run(
                 [
                     *self._base_command(),
                     subtitle_flag,
@@ -112,6 +165,8 @@ class SubprocessYtDlpBackend:
                     code="unexpected_media_download",
                     message="The subtitle-only command unexpectedly produced a media file.",
                     retryable=False,
+                    exit_status=completed.returncode,
+                    stderr_summary=sanitize_external_diagnostic(completed.stderr),
                 )
             caption_files = tuple(path for path in files if path.name.endswith(".json3"))
             if not caption_files:
@@ -122,6 +177,8 @@ class SubprocessYtDlpBackend:
                     code="caption_ambiguous",
                     message="The subtitle-only command produced more than one caption track.",
                     retryable=False,
+                    exit_status=completed.returncode,
+                    stderr_summary=sanitize_external_diagnostic(completed.stderr),
                 )
             try:
                 payload = json.loads(caption_files[0].read_text(encoding="utf-8"))
@@ -131,6 +188,8 @@ class SubprocessYtDlpBackend:
                     code="caption_parse_failed",
                     message="The selected caption track could not be parsed as JSON3.",
                     retryable=True,
+                    exit_status=completed.returncode,
+                    stderr_summary=sanitize_external_diagnostic(completed.stderr),
                 ) from error
             if not isinstance(payload, dict):
                 raise YouTubeGatewayFailure(
@@ -138,6 +197,8 @@ class SubprocessYtDlpBackend:
                     code="caption_parse_failed",
                     message="The selected caption track could not be parsed as JSON3.",
                     retryable=True,
+                    exit_status=completed.returncode,
+                    stderr_summary=sanitize_external_diagnostic(completed.stderr),
                 )
             return payload
 
@@ -158,15 +219,7 @@ class SubprocessYtDlpBackend:
 
     def _run(self, command: list[str], *, stage: str) -> subprocess.CompletedProcess[str]:
         try:
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                check=False,
-                encoding="utf-8",
-                errors="replace",
-                text=True,
-                timeout=self._timeout_seconds,
-            )
+            completed = self._runner.run(command, self._timeout_seconds)
         except subprocess.TimeoutExpired as error:
             raise YouTubeGatewayFailure(
                 stage=stage,
@@ -175,7 +228,11 @@ class SubprocessYtDlpBackend:
                 retryable=True,
             ) from error
         if completed.returncode != 0:
-            raise _classify_ytdlp_failure(stage, completed.stdout + "\n" + completed.stderr)
+            raise _classify_ytdlp_failure(
+                stage,
+                completed.stdout + "\n" + completed.stderr,
+                completed.returncode,
+            )
         return completed
 
 
@@ -219,11 +276,17 @@ class YtDlpYouTubeGateway:
 
 
 class YouTubeTranscriptAdapter:
-    def __init__(self, gateway: YouTubeGateway) -> None:
+    def __init__(
+        self,
+        gateway: YouTubeGateway,
+        *,
+        source_name: str = "youtube_caption",
+    ) -> None:
         self._gateway = gateway
+        self.name = source_name
 
     def fetch(self, request: VideoRequest) -> EvidenceBundle:
-        video_id = _video_id(request.url)
+        video_id = youtube_video_id(request.url)
         try:
             player = self._gateway.load_player(video_id)
         except YouTubeGatewayFailure as failure:
@@ -269,7 +332,7 @@ class YouTubeTranscriptAdapter:
             return _failed_evidence(
                 metadata=metadata,
                 failure=failure,
-                transcript_source="youtube_caption",
+                transcript_source=self.name,
                 transcript_language=_optional_text(track.get("languageCode")),
                 transcript_is_generated=track.get("kind") == "asr",
             )
@@ -280,7 +343,7 @@ class YouTubeTranscriptAdapter:
             return EvidenceBundle(
                 metadata=metadata,
                 segments=(),
-                transcript_source="youtube_caption",
+                transcript_source=self.name,
                 transcript_language=_optional_text(track.get("languageCode")),
                 transcript_is_generated=track.get("kind") == "asr",
                 completeness="partial",
@@ -291,7 +354,7 @@ class YouTubeTranscriptAdapter:
             return EvidenceBundle(
                 metadata=metadata,
                 segments=segments,
-                transcript_source="youtube_caption",
+                transcript_source=self.name,
                 transcript_language=_optional_text(track.get("languageCode")),
                 transcript_is_generated=track.get("kind") == "asr",
                 completeness="partial",
@@ -301,7 +364,7 @@ class YouTubeTranscriptAdapter:
         return EvidenceBundle(
             metadata=metadata,
             segments=segments,
-            transcript_source="youtube_caption",
+            transcript_source=self.name,
             transcript_language=_optional_text(track.get("languageCode")),
             transcript_is_generated=track.get("kind") == "asr",
             completeness="complete",
@@ -309,7 +372,7 @@ class YouTubeTranscriptAdapter:
         )
 
 
-def _video_id(url: str) -> str:
+def youtube_video_id(url: str) -> str:
     parsed = urlparse(url)
     host = parsed.netloc.lower().split(":", 1)[0]
     if host in {"youtu.be", "www.youtu.be"}:
@@ -326,13 +389,18 @@ def _video_id(url: str) -> str:
 def _choose_track(
     tracks: list[dict[str, Any]], preferred_languages: tuple[str, ...]
 ) -> dict[str, Any]:
-    for language in preferred_languages:
-        for track in tracks:
-            if track.get("languageCode") == language:
-                return track
-    if tracks:
-        return tracks[0]
-    raise ValueError("The video has no caption tracks")
+    candidates = tuple(
+        CaptionTrack(
+            identifier=str(index),
+            language_code=str(track.get("languageCode") or ""),
+            display_name=str(track.get("name") or track.get("languageCode") or ""),
+            is_generated=track.get("kind") == "asr",
+            is_original=track.get("isOriginal") is True,
+        )
+        for index, track in enumerate(tracks)
+    )
+    selected = choose_caption_track(candidates, preferred_languages)
+    return tracks[int(selected.identifier)]
 
 
 def _segments_from_json3(
@@ -405,7 +473,7 @@ def _caption_content_failure(*, has_untimed_text: bool) -> DigestFailure:
 
 def _tracks_from_ytdlp(info: dict[str, Any], video_id: str) -> list[dict[str, Any]]:
     tracks: list[dict[str, Any]] = []
-    original_language = _optional_text(info.get("language"))
+    original_language = _infer_ytdlp_original_language(info)
     for field_name, is_generated in (
         ("subtitles", False),
         ("automatic_captions", True),
@@ -432,10 +500,15 @@ def _tracks_from_ytdlp(info: dict[str, Any], video_id: str) -> list[dict[str, An
                     "baseUrl": _ytdlp_track_url(video_id, language_code, is_generated),
                     "languageCode": language_code,
                     "name": {"simpleText": language_code},
+                    "isOriginal": language_code == original_language,
                     **({"kind": "asr"} if is_generated else {}),
                 }
             )
     return tracks
+
+
+def _infer_ytdlp_original_language(info: dict[str, Any]) -> str | None:
+    return _optional_text(info.get("language"))
 
 
 def _is_original_auto_caption(formats: object) -> bool:
@@ -471,6 +544,8 @@ def _failed_evidence(
             code=failure.code,
             message=failure.message,
             retryable=failure.retryable,
+            exit_status=failure.exit_status,
+            stderr_summary=failure.stderr_summary,
         ),
     )
 
@@ -485,14 +560,21 @@ def _ytdlp_track_url(video_id: str, language_code: str, is_generated: bool) -> s
     return f"yt-dlp://caption/{video_id}?{query}"
 
 
-def _classify_ytdlp_failure(stage: str, output: str) -> YouTubeGatewayFailure:
+def _classify_ytdlp_failure(
+    stage: str,
+    output: str,
+    exit_status: int,
+) -> YouTubeGatewayFailure:
     normalized = output.casefold()
+    stderr_summary = sanitize_external_diagnostic(output)
     if "no module named yt_dlp" in normalized:
         return YouTubeGatewayFailure(
             stage=stage,
             code="dependency_missing",
             message="yt-dlp is unavailable. Run uv sync in the skill directory and retry.",
             retryable=False,
+            exit_status=exit_status,
+            stderr_summary=stderr_summary,
         )
     if "http error 429" in normalized or "too many requests" in normalized:
         return YouTubeGatewayFailure(
@@ -500,6 +582,8 @@ def _classify_ytdlp_failure(stage: str, output: str) -> YouTubeGatewayFailure:
             code="rate_limited",
             message="YouTube rate-limited the request. Wait before retrying.",
             retryable=True,
+            exit_status=exit_status,
+            stderr_summary=stderr_summary,
         )
     if "sign in to confirm" in normalized or "login required" in normalized:
         return YouTubeGatewayFailure(
@@ -507,6 +591,8 @@ def _classify_ytdlp_failure(stage: str, output: str) -> YouTubeGatewayFailure:
             code="authentication_required",
             message="YouTube requires an authenticated browser session for this video.",
             retryable=False,
+            exit_status=exit_status,
+            stderr_summary=stderr_summary,
         )
     if "video unavailable" in normalized or "private video" in normalized:
         return YouTubeGatewayFailure(
@@ -514,12 +600,16 @@ def _classify_ytdlp_failure(stage: str, output: str) -> YouTubeGatewayFailure:
             code="video_unavailable",
             message="The YouTube video is unavailable or access-restricted.",
             retryable=False,
+            exit_status=exit_status,
+            stderr_summary=stderr_summary,
         )
     return YouTubeGatewayFailure(
         stage=stage,
         code="external_tool_failed",
         message=f"yt-dlp could not complete the {stage} stage. Update dependencies and retry.",
         retryable=True,
+        exit_status=exit_status,
+        stderr_summary=stderr_summary,
     )
 
 

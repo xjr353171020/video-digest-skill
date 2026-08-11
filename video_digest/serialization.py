@@ -2,17 +2,31 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DigestFailure, EvidenceBundle, VideoRequest
+from .diagnostics import sanitize_external_diagnostic
+from .domain import (
+    DigestFailure,
+    EvidenceArtifact,
+    EvidenceAttempt,
+    EvidenceBundle,
+    EvidenceCacheInfo,
+    VideoRequest,
+)
 
 
 def evidence_document(request: VideoRequest, evidence: EvidenceBundle) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": evidence.completeness,
         "request": {
             "url": request.url,
             "focus": request.focus,
             "preferred_languages": list(request.preferred_languages),
+        },
+        "run": {
+            "run_id": evidence.run_id,
+            "attempts": [_attempt_document(attempt) for attempt in evidence.attempts],
+            "artifacts": [_artifact_document(artifact) for artifact in evidence.artifacts],
+            "cache": _cache_document(evidence.cache),
         },
         "evidence": {
             "metadata": {
@@ -42,7 +56,7 @@ def evidence_document(request: VideoRequest, evidence: EvidenceBundle) -> dict[s
 
 def failed_request_document(request: VideoRequest, message: str) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "failed",
         "request": {
             "url": request.url,
@@ -50,11 +64,14 @@ def failed_request_document(request: VideoRequest, message: str) -> dict[str, An
             "preferred_languages": list(request.preferred_languages),
         },
         "evidence": None,
+        "run": None,
         "failure": {
             "stage": "request",
             "code": "unsupported_url",
             "message": message,
             "retryable": False,
+            "exit_status": None,
+            "stderr_summary": None,
         },
     }
 
@@ -67,4 +84,45 @@ def _failure_document(failure: DigestFailure | None) -> dict[str, Any] | None:
         "code": failure.code,
         "message": failure.message,
         "retryable": failure.retryable,
+        "exit_status": failure.exit_status,
+        "stderr_summary": _safe_diagnostic(failure.stderr_summary),
     }
+
+
+def _attempt_document(attempt: EvidenceAttempt) -> dict[str, Any]:
+    return {
+        "source": attempt.source,
+        "stage": attempt.stage,
+        "status": attempt.status.value,
+        "code": attempt.code,
+        "message": attempt.message,
+        "retryable": attempt.retryable,
+        "exit_status": attempt.exit_status,
+        "stderr_summary": _safe_diagnostic(attempt.stderr_summary),
+    }
+
+
+def _artifact_document(artifact: EvidenceArtifact) -> dict[str, Any]:
+    return {
+        "run_id": artifact.run_id,
+        "artifact_id": artifact.artifact_id,
+        "kind": artifact.kind,
+        "source": artifact.source,
+        "content_sha256": artifact.content_sha256,
+        "complete": artifact.complete,
+    }
+
+
+def _cache_document(cache: EvidenceCacheInfo | None) -> dict[str, Any] | None:
+    if cache is None:
+        return None
+    return {
+        "status": cache.status.value,
+        "key": cache.key,
+        "basis": cache.basis,
+        "content_version": cache.content_version,
+    }
+
+
+def _safe_diagnostic(value: str | None) -> str | None:
+    return sanitize_external_diagnostic(value) if value is not None else None

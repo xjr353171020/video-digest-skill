@@ -1,48 +1,56 @@
 ---
 name: video-digest
-description: Summarize one public, captioned YouTube video from its URL into an evidence-grounded digest with real timestamps, key points, information-density and worth-watching scores, a watch/skip recommendation, and estimated time saved. Use when the user asks to summarize, skim, extract key points or timestamps, focus on one topic, or decide whether a YouTube video is worth watching. Current T1 does not support Bilibili, channels, multiple videos, local files, speech-to-text fallback, private videos, or visual-only analysis.
+description: Summarize one public, captioned YouTube video from its URL into an evidence-grounded digest with real timestamps, key points, information-density and worth-watching scores, a watch/skip recommendation, and estimated time saved. Use when the user asks to summarize, skim, extract key points or timestamps, focus on one topic, or decide whether a YouTube video is worth watching. Tries a current connected-Chrome transcript capture, the lightweight YouTube transcript interface, then targeted yt-dlp captions, with structured diagnostics and validated local caching. Current T2 does not support Bilibili, channels, multiple videos, local files, speech-to-text fallback, private videos, or visual-only analysis.
 ---
 
 # Video Digest
 
-Use the bundled Python workflow to fetch a compact evidence bundle, then summarize only that evidence.
+Fetch one compact evidence bundle, then summarize only that evidence.
 
 ## Fetch evidence
 
 1. Treat the directory containing this `SKILL.md` as `<skill-directory>`.
-2. Create a unique temporary `.json` path for this run.
-3. Run the command from any working directory:
+2. Create a unique temporary `.json` path for this run's evidence output.
+3. If a connected Chrome session is available and the target page exposes YouTube's visible transcript, read [references/chrome-transcript.md](references/chrome-transcript.md), create a unique current-run capture, and retain its capture ID. Use only page-visible state; never inspect cookies, local storage, profiles, passwords, tokens, or browser databases.
+4. Run from any working directory. Without a Chrome capture:
 
 ```powershell
 $evidencePath = Join-Path ([IO.Path]::GetTempPath()) ("video-digest-" + [guid]::NewGuid() + ".json")
 uv run --directory "<skill-directory>" python -m video_digest "<youtube-url>" --output $evidencePath
 ```
 
-Add `--focus "<question-or-topic>"` when the user asks about a particular topic. Add repeated `--language <code>` arguments only when the user requests a specific subtitle language; otherwise keep the built-in preference order of Simplified Chinese, Chinese, then English.
+With a current Chrome capture, append both validation arguments:
 
-4. Read the UTF-8 JSON file. Use only `evidence.metadata` and `evidence.segments` as source material for the digest.
-5. Verify that `evidence.media_downloaded` is `false`. Stop and report a product defect if it is ever `true`.
+```powershell
+uv run --directory "<skill-directory>" python -m video_digest "<youtube-url>" --output $evidencePath --chrome-transcript $chromeCapturePath --chrome-capture-id $chromeCaptureId
+```
 
-The command uses a single selected subtitle track and `yt-dlp --skip-download`. It may create one temporary JSON3 subtitle inside an isolated temporary directory; it must not retain audio or video.
+Add `--focus "<question-or-topic>"` for a requested topic. Add repeated `--language <code>` arguments only for an explicit subtitle-language request; otherwise keep Simplified Chinese, Chinese, then English. Add `--no-cache` when the user requests a forced refresh or no persistent transcript cache.
+
+5. Read the UTF-8 JSON. The source order is `chrome_transcript`, `youtube_transcript_api`, then `yt_dlp`. A locally valid cache candidate is used only after a current source confirms the same subtitle track and content version; a current failure never promotes an old transcript to success. Inspect `run.attempts`, `run.artifacts`, and `run.cache` rather than inferring success from files elsewhere.
+6. Use only `evidence.metadata` and `evidence.segments` as source material. Verify `evidence.media_downloaded` is `false`; stop and report a product defect if it is ever `true`.
+
+The workflow enumerates caption tracks and fetches exactly one selected track. It prefers a requested-language manual track, then an original/manual track, then one automatic track. Language aliases such as `zh-Hans` and `zh-CN` match. It never uses broad subtitle expressions that expand automatic translations.
 
 ## Handle partial results
 
 If `status` is not `complete` or `evidence.failure` is non-null:
 
-- Report the exact `stage`, `code`, actionable `message`, and whether retrying may help.
-- Do not generate a confident summary when `segments` is empty.
-- Do not reinterpret `captions_unavailable` or `caption_empty` as a successful transcript.
+- Report each `run.attempts` entry in order, including `source`, `stage`, `code`, actionable `message`, `retryable`, `exit_status`, and redacted `stderr_summary` when present.
+- Do not generate a confident summary from empty or partial segments.
+- Treat `rate_limited`, `authentication_required`, `site_blocked`, `timeout`, parse failures, and `dependency_missing` as distinct causes.
 - For `dependency_missing`, run `uv sync --directory "<skill-directory>"` once and retry.
 - For `rate_limited` or `timeout`, do not retry more than once in the same task.
-- For `authentication_required`, explain that private or access-restricted videos are outside T1.
+- For `authentication_required`, use a connected Chrome page only when the user can already access the video; do not request pasted credentials.
+- Treat `cache_invalid`, `cache_changed`, and `cache_unverified` as cache rejections, not transcript evidence. A `cache_hit` is valid only when the run also records a successful current-source revalidation.
 
-Do not ask the user to paste Cookie, API keys, tokens, or credentials. Do not copy or decrypt a browser Cookie database in T1.
+Never include Cookie values, authorization headers, API keys, signed URLs, tokens, or browser database contents in captures, evidence, logs, or the digest.
 
 ## Build the digest
 
-Read the complete transcript. For a long transcript, divide it into natural timestamp ranges, summarize each range into claims plus evidence, then merge and deduplicate. Re-open the relevant segments before making a precise or contentious claim.
+Read the complete transcript. For a long transcript, divide it into natural timestamp ranges, summarize each range into claims plus evidence, then merge and deduplicate. Re-open relevant segments before making a precise or contentious claim.
 
-Default to the user's language and use this compact structure unless they request another format:
+Default to the user's language and this compact structure unless requested otherwise:
 
 ```markdown
 # 视频速读
@@ -65,12 +73,12 @@ Default to the user's language and use this compact structure unless they reques
 - **预计节省时间：** 约 xx 分钟
 
 ## 证据边界
-- 字幕来源、语言、人工或自动字幕，以及任何缺失或不确定性
+- 字幕来源、语言、人工或自动字幕、缓存状态，以及任何失败或不确定性
 ```
 
-Include only points that materially help the user understand or decide. Collapse introductions, repetition, sponsor copy, rhetorical padding, and outros unless they affect the conclusion.
+Include only decision-relevant information. Collapse introductions, repetition, sponsor copy, rhetorical padding, and outros unless they affect the conclusion.
 
-Use timestamps only from transcript segments. Build timestamp links from `evidence.metadata.canonical_url` plus `&t=<whole-seconds>s`. Never invent a timestamp or imply that a transcript-only result includes visual evidence.
+Use timestamps only from transcript segments. Build timestamp links from `evidence.metadata.canonical_url` plus `&t=<whole-seconds>s`. Never invent timestamps or imply transcript-only evidence includes visual evidence.
 
 Score information density by unique decision-relevant information per minute, not speaking speed or popularity. Choose one recommendation:
 
@@ -79,12 +87,12 @@ Score information density by unique decision-relevant information per minute, no
 - `看摘要即可`: the transcript supports the useful conclusions without watching.
 - `跳过`: evidence is repetitive, weak, irrelevant, or too incomplete to justify the time.
 
-Estimate time saved transparently from the full duration minus the recommended watch segments, rounded to a practical whole-minute estimate.
+Estimate time saved from full duration minus recommended watch segments, rounded to a practical whole minute. If duration is unavailable, say the estimate cannot be calculated reliably.
 
-Separate direct transcript evidence from inference. Label opinions, predictions, anecdotes, and promotional claims when relevant. If the user explicitly asks for fact-checking, verify only load-bearing claims after producing the transcript-grounded digest, and keep external verification separate from what the video says.
+Separate transcript evidence from inference. Label opinions, predictions, anecdotes, and promotional claims when relevant. If the user explicitly asks for fact-checking, verify only load-bearing claims after producing the transcript-grounded digest, and keep external verification separate from what the video says.
 
 ## Finish safely
 
-Delete only the exact temporary evidence file created for this run after the final digest is prepared, unless the user asks to keep it. Never delete or modify unrelated files.
+Delete only the exact temporary evidence and Chrome-capture files created for this run after the final digest is prepared, unless the user asks to keep them. Do not delete the validated local cache or unrelated files.
 
-If the request is for Bilibili, ASR, visual analysis, multiple videos, or channel monitoring, state that the capability belongs to a later ticket instead of pretending T1 supports it.
+If the request is for Bilibili, ASR, visual analysis, multiple videos, or channel monitoring, state that the capability belongs to a later ticket instead of pretending T2 supports it.
