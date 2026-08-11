@@ -1,0 +1,25 @@
+{
+  "days": 7,
+  "max_videos_per_channel": 5,
+  "channels": [
+    {
+      "name": "Example YouTube channel",
+      "url": "https://www.youtube.com/@example/videos",
+      "priority": "high",
+      "topics": [
+        "AI",
+        "agents",
+        "technology"
+      ]
+    },
+    {
+      "name": "Example Bilibili UP",
+      "url": "https://space.bilibili.com/123456/video",
+      "priority": "normal",
+      "topics": [
+        "科技",
+        "AI"
+      ]
+    }
+  ]
+}
