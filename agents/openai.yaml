@@ -1,0 +1,4 @@
+interface:
+  display_name: "Video Digest"
+  short_description: "Summarize captioned YouTube videos fast"
+  default_prompt: "Use $video-digest to summarize this YouTube video and tell me whether it is worth watching."
