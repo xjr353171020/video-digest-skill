@@ -1,6 +1,6 @@
 ---
 name: video-digest
-description: Summarize one public, captioned YouTube video from its URL into an evidence-grounded digest with real timestamps, key points, information-density and worth-watching scores, a watch/skip recommendation, and estimated time saved. Use when the user asks to summarize, skim, extract key points or timestamps, focus on one topic, or decide whether a YouTube video is worth watching. Tries a current connected-Chrome transcript capture, the lightweight YouTube transcript interface, then targeted yt-dlp captions, with structured diagnostics and validated local caching. Current T2 does not support Bilibili, channels, multiple videos, local files, speech-to-text fallback, private videos, or visual-only analysis.
+description: Summarize one public, captioned YouTube video or Short from its URL into an evidence-grounded digest with real timestamps, key points, information-density and worth-watching scores, a watch/skip recommendation, and estimated time saved. Use when the user asks to summarize, skim, extract key points or timestamps, focus on one topic, or decide whether a YouTube video is worth watching. Tries a current connected-Chrome transcript capture, the lightweight YouTube transcript interface, then targeted yt-dlp captions, with structured diagnostics and validated local caching. Current T2 does not support Bilibili, channels, multiple videos, local files, speech-to-text fallback, private videos, or visual-only analysis.
 ---
 
 # Video Digest

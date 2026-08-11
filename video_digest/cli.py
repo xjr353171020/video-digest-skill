@@ -69,9 +69,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="video-digest",
-        description="Fetch a compact, timestamped evidence bundle from one public YouTube video.",
+        description="Fetch a compact, timestamped evidence bundle from one public YouTube video or Short.",
     )
-    parser.add_argument("url", help="Public YouTube watch or youtu.be URL")
+    parser.add_argument("url", help="Public YouTube watch, Shorts, or youtu.be URL")
     parser.add_argument("--focus", help="Question or topic the later digest should prioritize")
     parser.add_argument(
         "--language",

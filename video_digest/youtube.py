@@ -379,6 +379,9 @@ def youtube_video_id(url: str) -> str:
         video_id = parsed.path.strip("/").split("/", 1)[0]
     elif host.endswith("youtube.com"):
         video_id = parse_qs(parsed.query).get("v", [""])[0]
+        path_parts = parsed.path.strip("/").split("/")
+        if not video_id and len(path_parts) >= 2 and path_parts[0] == "shorts":
+            video_id = path_parts[1]
     else:
         video_id = ""
     if not re.fullmatch(r"[A-Za-z0-9_-]{6,}", video_id):
