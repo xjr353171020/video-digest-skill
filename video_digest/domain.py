@@ -45,6 +45,7 @@ class VideoMetadata:
     channel: str | None
     duration_seconds: int | None
     canonical_url: str
+    platform: str = "youtube"
 
 
 @dataclass(frozen=True)

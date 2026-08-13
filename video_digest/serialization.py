@@ -11,6 +11,7 @@ from .domain import (
     EvidenceCacheInfo,
     VideoRequest,
 )
+from .video_urls import video_reference
 
 
 def evidence_document(request: VideoRequest, evidence: EvidenceBundle) -> dict[str, Any]:
@@ -18,7 +19,7 @@ def evidence_document(request: VideoRequest, evidence: EvidenceBundle) -> dict[s
         "schema_version": 2,
         "status": evidence.completeness,
         "request": {
-            "url": request.url,
+            "url": video_reference(request.url).canonical_url,
             "focus": request.focus,
             "preferred_languages": list(request.preferred_languages),
         },
@@ -30,6 +31,7 @@ def evidence_document(request: VideoRequest, evidence: EvidenceBundle) -> dict[s
         },
         "evidence": {
             "metadata": {
+                "platform": evidence.metadata.platform,
                 "video_id": evidence.metadata.video_id,
                 "title": evidence.metadata.title,
                 "channel": evidence.metadata.channel,
@@ -59,7 +61,7 @@ def failed_request_document(request: VideoRequest, message: str) -> dict[str, An
         "schema_version": 2,
         "status": "failed",
         "request": {
-            "url": request.url,
+            "url": _safe_request_url(request.url),
             "focus": request.focus,
             "preferred_languages": list(request.preferred_languages),
         },
@@ -74,6 +76,13 @@ def failed_request_document(request: VideoRequest, message: str) -> dict[str, An
             "stderr_summary": None,
         },
     }
+
+
+def _safe_request_url(url: str) -> str:
+    try:
+        return video_reference(url).canonical_url
+    except ValueError:
+        return "<unsupported-url>"
 
 
 def _failure_document(failure: DigestFailure | None) -> dict[str, Any] | None:

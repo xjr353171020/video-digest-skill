@@ -19,7 +19,7 @@ from .domain import (
     VideoRequest,
 )
 from .integrity import evidence_content_sha256
-from .youtube import youtube_video_id
+from .video_urls import video_reference
 
 
 @dataclass(frozen=True)
@@ -206,6 +206,8 @@ class FileEvidenceCache:
         if age < timedelta(minutes=-5) or age > self._ttl:
             raise ValueError("cache_ttl")
         evidence = _parse_evidence(document.get("evidence"))
+        if evidence.metadata.platform != fingerprint["platform"]:
+            raise ValueError("platform")
         if evidence.metadata.video_id != fingerprint["video_id"]:
             raise ValueError("video_id")
         if not _is_complete_evidence(evidence):
@@ -227,8 +229,10 @@ class FileEvidenceCache:
 
 
 def _request_fingerprint(request: VideoRequest) -> dict[str, Any]:
+    reference = video_reference(request.url)
     return {
-        "video_id": youtube_video_id(request.url),
+        "platform": reference.platform,
+        "video_id": reference.video_id,
         "preferred_languages": [
             language.strip().replace("_", "-").casefold()
             for language in request.preferred_languages
@@ -273,6 +277,7 @@ def _track_identity(evidence: EvidenceBundle) -> tuple[str, str | None, bool]:
 def _evidence_document(evidence: EvidenceBundle) -> dict[str, Any]:
     return {
         "metadata": {
+            "platform": evidence.metadata.platform,
             "video_id": evidence.metadata.video_id,
             "title": evidence.metadata.title,
             "channel": evidence.metadata.channel,
@@ -303,6 +308,7 @@ def _parse_evidence(value: Any) -> EvidenceBundle:
     if not isinstance(metadata_value, dict) or not isinstance(segments_value, list):
         raise TypeError("evidence_shape")
     video_id = _required_text(metadata_value.get("video_id"), "video_id")
+    platform = _required_text(metadata_value.get("platform"), "platform")
     title = _required_text(metadata_value.get("title"), "title")
     canonical_url = _required_text(metadata_value.get("canonical_url"), "canonical_url")
     channel_value = metadata_value.get("channel")
@@ -332,6 +338,7 @@ def _parse_evidence(value: Any) -> EvidenceBundle:
         raise ValueError("incomplete_evidence")
     return EvidenceBundle(
         metadata=VideoMetadata(
+            platform=platform,
             video_id=video_id,
             title=title,
             channel=channel_value,
@@ -363,4 +370,4 @@ def _required_number(value: Any, field: str) -> float:
 
 
 _CACHE_SCHEMA_VERSION = 2
-_ADAPTER_VERSION = "youtube-evidence-t2-v2"
+_ADAPTER_VERSION = "video-evidence-t3-v1"

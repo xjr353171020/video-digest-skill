@@ -1,3 +1,9 @@
+from .bilibili import (
+    BilibiliChromeTranscriptFileSource,
+    BilibiliGatewayFailure,
+    BilibiliYtDlpSource,
+    SubprocessBilibiliBackend,
+)
 from .cache import FileEvidenceCache
 from .chrome_source import ChromeTranscriptFileSource
 from .domain import (
@@ -18,7 +24,7 @@ from .domain import (
     VideoRequest,
     WatchSegment,
 )
-from .orchestration import YouTubeEvidenceOrchestrator
+from .orchestration import EvidenceOrchestrator, YouTubeEvidenceOrchestrator
 from .workflow import DigestWorkflow
 from .youtube import (
     SubprocessYtDlpBackend,
@@ -33,6 +39,9 @@ from .youtube_sources import (
 )
 
 __all__ = [
+    "BilibiliChromeTranscriptFileSource",
+    "BilibiliGatewayFailure",
+    "BilibiliYtDlpSource",
     "CaptionTrack",
     "ChromeTranscriptFileSource",
     "DigestFailure",
@@ -47,8 +56,10 @@ __all__ = [
     "EvidenceBundle",
     "EvidenceCacheInfo",
     "EvidenceCacheStatus",
+    "EvidenceOrchestrator",
     "FileEvidenceCache",
     "LightweightYouTubeSource",
+    "SubprocessBilibiliBackend",
     "SubprocessYtDlpBackend",
     "TranscriptSegment",
     "VideoMetadata",

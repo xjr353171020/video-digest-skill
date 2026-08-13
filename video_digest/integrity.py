@@ -8,6 +8,7 @@ from .domain import EvidenceBundle
 
 def evidence_content_sha256(evidence: EvidenceBundle) -> str:
     payload = {
+        "platform": evidence.metadata.platform,
         "video_id": evidence.metadata.video_id,
         "title": evidence.metadata.title,
         "channel": evidence.metadata.channel,

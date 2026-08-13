@@ -17,21 +17,21 @@ from .domain import (
 from .integrity import evidence_content_sha256
 
 
-class YouTubeEvidenceSource(Protocol):
+class EvidenceSource(Protocol):
     name: str
 
     def fetch(self, request: VideoRequest) -> EvidenceBundle: ...
 
 
-class YouTubeEvidenceOrchestrator:
+class EvidenceOrchestrator:
     def __init__(
         self,
-        sources: tuple[YouTubeEvidenceSource, ...],
+        sources: tuple[EvidenceSource, ...],
         *,
         cache: FileEvidenceCache | None = None,
     ) -> None:
         if not sources:
-            raise ValueError("At least one YouTube evidence source is required")
+            raise ValueError("At least one video evidence source is required")
         self._sources = sources
         self._cache = cache
 
@@ -96,7 +96,7 @@ class YouTubeEvidenceOrchestrator:
                 )
 
         if latest_evidence is None:
-            raise RuntimeError("The configured YouTube evidence sources did not run")
+            raise RuntimeError("The configured video evidence sources did not run")
         if self._cache is not None and cached_candidate is not None:
             cache_info = self._cache.reject_unverified(request)
             attempts.append(_cache_attempt(cache_info, succeeded=False, code="cache_unverified"))
@@ -158,6 +158,9 @@ _UNAVAILABLE_CODES = frozenset(
         "source_not_configured",
     }
 )
+
+
+YouTubeEvidenceOrchestrator = EvidenceOrchestrator
 
 
 def _transcript_artifact(

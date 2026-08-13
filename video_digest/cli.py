@@ -8,11 +8,17 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from .bilibili import (
+    BilibiliChromeTranscriptFileSource,
+    BilibiliYtDlpSource,
+    SubprocessBilibiliBackend,
+)
 from .cache import FileEvidenceCache
 from .chrome_source import ChromeTranscriptFileSource
 from .domain import VideoRequest
-from .orchestration import YouTubeEvidenceOrchestrator
+from .orchestration import EvidenceOrchestrator
 from .serialization import evidence_document, failed_request_document
+from .video_urls import video_reference
 from .youtube import SubprocessYtDlpBackend, YouTubeTranscriptAdapter, YtDlpYouTubeGateway
 from .youtube_sources import (
     LightweightYouTubeSource,
@@ -35,27 +41,45 @@ def main(argv: Sequence[str] | None = None) -> int:
     cache = None
     if not arguments.no_cache:
         cache = FileEvidenceCache(arguments.cache_directory or _default_cache_directory())
-    adapter = YouTubeEvidenceOrchestrator(
-        sources=(
-            ChromeTranscriptFileSource(
-                arguments.chrome_transcript,
-                expected_capture_id=arguments.chrome_capture_id,
-            ),
-            LightweightYouTubeSource(
-                YouTubeTranscriptApiBackend(),
-                metadata_provider=YouTubeOEmbedMetadataProvider(),
-            ),
-            YouTubeTranscriptAdapter(
-                YtDlpYouTubeGateway(
-                    SubprocessYtDlpBackend(timeout_seconds=arguments.timeout_seconds),
-                ),
-                source_name="yt_dlp",
-            ),
-        ),
-        cache=cache,
-    )
     exit_code = 0
     try:
+        reference = video_reference(request.url)
+        if reference.platform == "youtube":
+            adapter = EvidenceOrchestrator(
+                sources=(
+                    ChromeTranscriptFileSource(
+                        arguments.chrome_transcript,
+                        expected_capture_id=arguments.chrome_capture_id,
+                    ),
+                    LightweightYouTubeSource(
+                        YouTubeTranscriptApiBackend(),
+                        metadata_provider=YouTubeOEmbedMetadataProvider(),
+                    ),
+                    YouTubeTranscriptAdapter(
+                        YtDlpYouTubeGateway(
+                            SubprocessYtDlpBackend(timeout_seconds=arguments.timeout_seconds),
+                        ),
+                        source_name="yt_dlp",
+                    ),
+                ),
+                cache=cache,
+            )
+        else:
+            adapter = EvidenceOrchestrator(
+                sources=(
+                    BilibiliChromeTranscriptFileSource(
+                        arguments.chrome_transcript,
+                        expected_capture_id=arguments.chrome_capture_id,
+                    ),
+                    BilibiliYtDlpSource(
+                        SubprocessBilibiliBackend(
+                            timeout_seconds=arguments.timeout_seconds,
+                            cookies_from_browser=arguments.bilibili_cookies_from_browser,
+                        )
+                    ),
+                ),
+                cache=cache,
+            )
         evidence = adapter.fetch(request)
     except ValueError as error:
         document = failed_request_document(request, str(error))
@@ -69,9 +93,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="video-digest",
-        description="Fetch a compact, timestamped evidence bundle from one public YouTube video or Short.",
+        description=(
+            "Fetch a compact, timestamped evidence bundle from one public YouTube or "
+            "Bilibili video."
+        ),
     )
-    parser.add_argument("url", help="Public YouTube watch, Shorts, or youtu.be URL")
+    parser.add_argument("url", help="Public YouTube, YouTube Shorts, youtu.be, or Bilibili URL")
     parser.add_argument("--focus", help="Question or topic the later digest should prioritize")
     parser.add_argument(
         "--language",
@@ -107,6 +134,13 @@ def _parser() -> argparse.ArgumentParser:
         type=float,
         default=90.0,
         help="Per yt-dlp operation timeout (default: 90)",
+    )
+    parser.add_argument(
+        "--bilibili-cookies-from-browser",
+        help=(
+            "Explicit yt-dlp browser selector for Bilibili subtitles, such as chrome. "
+            "Prefer a current connected-browser capture; a locked Cookie database is not copied."
+        ),
     )
     return parser
 

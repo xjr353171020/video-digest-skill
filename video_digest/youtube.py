@@ -22,6 +22,7 @@ from .domain import (
     VideoMetadata,
     VideoRequest,
 )
+from .video_urls import video_reference
 
 
 class YouTubeGateway(Protocol):
@@ -373,20 +374,10 @@ class YouTubeTranscriptAdapter:
 
 
 def youtube_video_id(url: str) -> str:
-    parsed = urlparse(url)
-    host = parsed.netloc.lower().split(":", 1)[0]
-    if host in {"youtu.be", "www.youtu.be"}:
-        video_id = parsed.path.strip("/").split("/", 1)[0]
-    elif host.endswith("youtube.com"):
-        video_id = parse_qs(parsed.query).get("v", [""])[0]
-        path_parts = parsed.path.strip("/").split("/")
-        if not video_id and len(path_parts) >= 2 and path_parts[0] == "shorts":
-            video_id = path_parts[1]
-    else:
-        video_id = ""
-    if not re.fullmatch(r"[A-Za-z0-9_-]{6,}", video_id):
+    reference = video_reference(url)
+    if reference.platform != "youtube":
         raise ValueError("The URL does not contain a valid YouTube video ID")
-    return video_id
+    return reference.video_id
 
 
 def _choose_track(
