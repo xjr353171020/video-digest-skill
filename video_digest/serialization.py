@@ -13,10 +13,12 @@ from .domain import (
 )
 from .video_urls import video_reference
 
+_EVIDENCE_SCHEMA_VERSION = 3
+
 
 def evidence_document(request: VideoRequest, evidence: EvidenceBundle) -> dict[str, Any]:
     return {
-        "schema_version": 2,
+        "schema_version": _EVIDENCE_SCHEMA_VERSION,
         "status": evidence.completeness,
         "request": {
             "url": video_reference(request.url).canonical_url,
@@ -51,6 +53,14 @@ def evidence_document(request: VideoRequest, evidence: EvidenceBundle) -> dict[s
             "transcript_is_generated": evidence.transcript_is_generated,
             "completeness": evidence.completeness,
             "media_downloaded": evidence.media_downloaded,
+            "media": {
+                "downloaded": evidence.media_downloaded,
+                "kind": evidence.media_kind,
+                "retained": evidence.media_retained,
+                "cleanup_status": evidence.media_cleanup_status,
+                "locator": evidence.media_locator,
+                "sent_to_cloud": evidence.data_sent_to_cloud,
+            },
             "failure": _failure_document(evidence.failure),
         },
     }
@@ -58,7 +68,7 @@ def evidence_document(request: VideoRequest, evidence: EvidenceBundle) -> dict[s
 
 def failed_request_document(request: VideoRequest, message: str) -> dict[str, Any]:
     return {
-        "schema_version": 2,
+        "schema_version": _EVIDENCE_SCHEMA_VERSION,
         "status": "failed",
         "request": {
             "url": _safe_request_url(request.url),

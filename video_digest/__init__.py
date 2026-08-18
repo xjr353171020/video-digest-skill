@@ -1,3 +1,12 @@
+from .asr import (
+    AsrBackendFailure,
+    AsrModelNotice,
+    AsrModelProbe,
+    AsrTranscript,
+    FasterWhisperTranscriber,
+    LocalAsrSource,
+    YtDlpAudioBackend,
+)
 from .bilibili import (
     BilibiliChromeTranscriptFileSource,
     BilibiliGatewayFailure,
@@ -39,6 +48,10 @@ from .youtube_sources import (
 )
 
 __all__ = [
+    "AsrBackendFailure",
+    "AsrModelNotice",
+    "AsrModelProbe",
+    "AsrTranscript",
     "BilibiliChromeTranscriptFileSource",
     "BilibiliGatewayFailure",
     "BilibiliYtDlpSource",
@@ -57,8 +70,10 @@ __all__ = [
     "EvidenceCacheInfo",
     "EvidenceCacheStatus",
     "EvidenceOrchestrator",
+    "FasterWhisperTranscriber",
     "FileEvidenceCache",
     "LightweightYouTubeSource",
+    "LocalAsrSource",
     "SubprocessBilibiliBackend",
     "SubprocessYtDlpBackend",
     "TranscriptSegment",
@@ -70,5 +85,6 @@ __all__ = [
     "YouTubeOEmbedMetadataProvider",
     "YouTubeTranscriptAdapter",
     "YouTubeTranscriptApiBackend",
+    "YtDlpAudioBackend",
     "YtDlpYouTubeGateway",
 ]

@@ -1,6 +1,6 @@
 ---
 name: video-digest
-description: Summarize one captioned YouTube video, YouTube Short, or Bilibili BV video from its URL into an evidence-grounded digest with real timestamps, key points, information-density and worth-watching scores, a watch/skip recommendation, and estimated time saved. Use when the user asks to summarize, skim, extract key points or timestamps, focus on one topic, or decide whether one YouTube or Bilibili video is worth watching. Prefer a current connected-Chrome transcript capture, then use platform-specific lightweight or targeted yt-dlp subtitle sources, with structured diagnostics and validated local caching. Current T3 does not support channels, multiple videos, local files, speech-to-text fallback, private videos, or visual-only analysis.
+description: Summarize one YouTube video, YouTube Short, or Bilibili BV video from its URL into an evidence-grounded digest with real timestamps, key points, information-density and worth-watching scores, a watch/skip recommendation, and estimated time saved. Use when the user asks to summarize, skim, extract key points or timestamps, focus on one topic, or decide whether one YouTube or Bilibili video is worth watching. Prefer current browser or native captions; only after every caption path is explicitly unavailable, use an audio-only, fully local faster-whisper CPU INT8 fallback with a confirmation gate before the first model download. Current T4 does not support channels, multiple videos, local files, private videos, or visual-only analysis.
 ---
 
 # Video Digest
@@ -30,10 +30,13 @@ uv run --directory "<skill-directory>" python -m video_digest "<video-url>" --ou
 
 Add `--focus "<question-or-topic>"` for a requested topic. Add repeated `--language <code>` arguments only for an explicit subtitle-language request; otherwise keep Simplified Chinese, Chinese, then English. Add `--no-cache` when the user requests a forced refresh or no persistent transcript cache.
 
-5. Read the UTF-8 JSON. YouTube source order is `chrome_transcript`, `youtube_transcript_api`, then `yt_dlp`. Bilibili source order is `bilibili_browser_transcript`, then `bilibili_yt_dlp`. A locally valid cache candidate is used only after a current source confirms the same platform, video/part identity, subtitle track, and content version; a current failure never promotes an old transcript to success. Inspect `run.attempts`, `run.artifacts`, and `run.cache` rather than inferring success from files elsewhere.
-6. Use only `evidence.metadata` and `evidence.segments` as source material. Verify `evidence.media_downloaded` is `false`; stop and report a product defect if it is ever `true`.
+5. Read the UTF-8 JSON. YouTube source order is `chrome_transcript`, `youtube_transcript_api`, then `yt_dlp`. Bilibili source order is `bilibili_browser_transcript`, then `bilibili_yt_dlp`. Local ASR may run only when every caption attempt has status `unavailable`; a failed authentication, rate limit, site block, timeout, empty/invalid caption, or parse failure must block ASR. A locally valid cache candidate is used only after a current caption source confirms the same platform, video/part identity, subtitle track, and content version; a current failure never promotes an old transcript to success. Inspect `run.attempts`, `run.artifacts`, and `run.cache` rather than inferring success from files elsewhere.
+6. If the final attempt is `local_faster_whisper`, read [references/local-asr.md](references/local-asr.md) and follow its dependency, model-consent, disk-space, audio-only, and cleanup rules. Never add `--allow-asr-model-download` before showing the `asr_model_required` cost to the user and receiving explicit confirmation.
+7. Use only `evidence.metadata` and `evidence.segments` as source material. For caption evidence, require `evidence.media.downloaded` to be `false`. For local ASR, require `media.downloaded: true`, `media.kind: audio`, `media.sent_to_cloud: false`, and `media.cleanup_status: deleted` unless `--keep-asr-audio` was explicitly requested. Treat any other downloaded-media shape as a product defect.
 
 The workflow enumerates caption tracks and fetches exactly one selected track. It prefers a requested-language manual track, then an original/manual track, then one automatic track. Language aliases such as `zh-Hans` and `zh-CN` match. It never uses broad subtitle expressions that expand automatic translations.
+
+The ASR fallback selects yt-dlp `bestaudio` only; it never requests the full video or silently switches to a cloud transcription service. It defaults to the multilingual faster-whisper `small` model, Windows CPU, and INT8. Larger `medium`, `turbo`, or `large-v3` models and CUDA compute are explicit options documented in the ASR reference; each not-yet-installed model requires its own cost confirmation. Complete local ASR evidence bypasses the caption cache because downloaded audio cannot be revalidated as a current subtitle track.
 
 ## Handle partial results
 
@@ -42,7 +45,11 @@ If `status` is not `complete` or `evidence.failure` is non-null:
 - Report each `run.attempts` entry in order, including `source`, `stage`, `code`, actionable `message`, `retryable`, `exit_status`, and redacted `stderr_summary` when present.
 - Do not generate a confident summary from empty or partial segments.
 - Treat `rate_limited`, `authentication_required`, `site_blocked`, `timeout`, parse failures, and `dependency_missing` as distinct causes.
-- For `dependency_missing`, run `uv sync --directory "<skill-directory>"` once and retry.
+- For caption-path `dependency_missing`, run `uv sync --directory "<skill-directory>"` once and retry.
+- For `asr_dependency_missing`, run `uv sync --directory "<skill-directory>" --extra asr` once, then retry with `uv run --extra asr ...`. This installs local ASR code but does not authorize or download a model.
+- For `asr_model_required`, report the model name, estimated download size, CPU INT8 cost, and disk warning from the error. Stop for explicit confirmation. After confirmation, rerun once with `--allow-asr-model-download`; do not treat a generic earlier request to summarize as model-download consent.
+- For `disk_space_insufficient`, keep both model and temporary audio local but point `--asr-model-directory` and/or `--asr-temporary-directory` at a drive with enough free space.
+- For `audio_download_failed`, `audio_decode_failed`, `asr_model_download_failed`, `asr_transcription_failed`, or `asr_transcript_quality_failed`, report the exact stage and redacted diagnostic. Do not summarize unusable text or fall back to cloud ASR.
 - For `rate_limited` or `timeout`, do not retry more than once in the same task.
 - For `authentication_required`, use a connected Chrome page only when the user can already access the video; do not request pasted credentials.
 - For Bilibili, prefer the connected-browser capture. Use `--bilibili-cookies-from-browser <selector>` only when the user explicitly authorizes the local yt-dlp adapter. If it returns `cookie_database_locked`, do not copy, decrypt, unlock, or otherwise manipulate the browser Cookie database; use the connected browser path or ask the user to close the browser before retrying.
@@ -97,6 +104,6 @@ Separate transcript evidence from inference. Label opinions, predictions, anecdo
 
 ## Finish safely
 
-Delete only the exact temporary evidence and Chrome-capture files created for this run after the final digest is prepared, unless the user asks to keep them. Do not delete the validated local cache or unrelated files.
+Delete only the exact temporary evidence and Chrome-capture files created for this run after the final digest is prepared, unless the user asks to keep them. The ASR runner itself deletes only its unique current-run audio directory after success or failure; do not broaden that cleanup. With `--keep-asr-audio`, report the retained current-run path from local execution context without exposing it in public output. Do not delete the local ASR model, validated caption cache, or unrelated files.
 
-If the request is for ASR, visual analysis, multiple videos, channel monitoring, a local file, a private video, or a non-BV Bilibili URL, state that the capability belongs to a later ticket instead of pretending T3 supports it.
+If the request is for visual analysis, multiple videos, channel monitoring, a local file, a private video, or a non-BV Bilibili URL, state that the capability belongs to a later ticket instead of pretending T4 supports it.

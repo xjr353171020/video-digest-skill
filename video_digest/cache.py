@@ -136,6 +136,21 @@ class FileEvidenceCache:
     def store(self, request: VideoRequest, evidence: EvidenceBundle) -> EvidenceCacheInfo:
         fingerprint = _request_fingerprint(request)
         key = _cache_key(fingerprint)
+        if (
+            evidence.completeness == "complete"
+            and evidence.failure is None
+            and evidence.segments
+            and evidence.media_downloaded
+        ):
+            return EvidenceCacheInfo(
+                status=EvidenceCacheStatus.BYPASSED,
+                key=key,
+                basis=(
+                    "Complete local ASR evidence was returned for this run, but the caption "
+                    "cache was bypassed because it cannot revalidate downloaded audio content."
+                ),
+                content_version=evidence_content_sha256(evidence),
+            )
         if not _is_complete_evidence(evidence):
             return EvidenceCacheInfo(
                 status=EvidenceCacheStatus.INVALID,
@@ -369,5 +384,5 @@ def _required_number(value: Any, field: str) -> float:
     return number
 
 
-_CACHE_SCHEMA_VERSION = 2
-_ADAPTER_VERSION = "video-evidence-t3-v1"
+_CACHE_SCHEMA_VERSION = 3
+_ADAPTER_VERSION = "video-evidence-t4-v1"

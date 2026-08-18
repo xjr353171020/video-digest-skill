@@ -497,7 +497,7 @@ def test_user_gets_redacted_ytdlp_rate_limit_diagnostics() -> None:
         VideoRequest(url="https://www.youtube.com/watch?v=demo123"),
         evidence,
     )
-    assert document["schema_version"] == 2
+    assert document["schema_version"] == 3
     assert document["run"]["run_id"] == evidence.run_id
     assert document["run"]["attempts"][0]["exit_status"] == 1
     assert "super-secret" not in document["run"]["attempts"][0]["stderr_summary"]

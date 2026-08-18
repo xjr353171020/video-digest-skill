@@ -1,4 +1,4 @@
 interface:
   display_name: "Video Digest"
-  short_description: "Summarize YouTube and Bilibili videos fast"
+  short_description: "Summarize captioned or speech-only web videos"
   default_prompt: "Use $video-digest to summarize this YouTube or Bilibili video and tell me whether it is worth watching."

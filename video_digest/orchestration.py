@@ -28,17 +28,20 @@ class EvidenceOrchestrator:
         self,
         sources: tuple[EvidenceSource, ...],
         *,
+        fallback_source: EvidenceSource | None = None,
         cache: FileEvidenceCache | None = None,
     ) -> None:
         if not sources:
             raise ValueError("At least one video evidence source is required")
         self._sources = sources
+        self._fallback_source = fallback_source
         self._cache = cache
 
     def fetch(self, request: VideoRequest) -> EvidenceBundle:
         run_id = str(uuid4())
         attempts: list[EvidenceAttempt] = []
         latest_evidence: EvidenceBundle | None = None
+        latest_blocking_evidence: EvidenceBundle | None = None
         cache_info = None
         cached_candidate: EvidenceBundle | None = None
 
@@ -64,7 +67,7 @@ class EvidenceOrchestrator:
         for source in self._sources:
             evidence = source.fetch(request)
             latest_evidence = evidence
-            attempt = _attempt(source.name, evidence)
+            attempt = _attempt(source.name, evidence, success_stage="subtitles")
             attempts.append(attempt)
             if attempt.status is EvidenceAttemptStatus.SUCCEEDED:
                 if self._cache is not None:
@@ -94,6 +97,48 @@ class EvidenceOrchestrator:
                     artifacts=(_transcript_artifact(run_id, source.name, evidence),),
                     cache=cache_info,
                 )
+            if attempt.status is EvidenceAttemptStatus.FAILED:
+                latest_blocking_evidence = evidence
+
+        if self._fallback_source is not None and _fallback_is_allowed(attempts):
+            source = self._fallback_source
+            evidence = source.fetch(request)
+            latest_evidence = evidence
+            success_stage = getattr(source, "success_stage", "transcription")
+            if not isinstance(success_stage, str):
+                success_stage = "transcription"
+            attempt = _attempt(source.name, evidence, success_stage=success_stage)
+            attempts.append(attempt)
+            if attempt.status is EvidenceAttemptStatus.SUCCEEDED:
+                if self._cache is not None:
+                    if cached_candidate is not None:
+                        confirmation = self._cache.confirm_current(
+                            request,
+                            cached_candidate,
+                            evidence,
+                        )
+                        if confirmation.status is EvidenceCacheStatus.HIT:
+                            attempts.append(_cache_attempt(confirmation, succeeded=True))
+                            return replace(
+                                cached_candidate,
+                                run_id=run_id,
+                                attempts=tuple(attempts),
+                                artifacts=(
+                                    _transcript_artifact(run_id, "cache", cached_candidate),
+                                ),
+                                cache=confirmation,
+                            )
+                        attempts.append(_cache_attempt(confirmation, succeeded=False))
+                    cache_info = self._cache.store(request, evidence)
+                return replace(
+                    evidence,
+                    run_id=run_id,
+                    attempts=tuple(attempts),
+                    artifacts=(_transcript_artifact(run_id, source.name, evidence),),
+                    cache=cache_info,
+                )
+            if attempt.status is EvidenceAttemptStatus.FAILED:
+                latest_blocking_evidence = evidence
 
         if latest_evidence is None:
             raise RuntimeError("The configured video evidence sources did not run")
@@ -101,7 +146,7 @@ class EvidenceOrchestrator:
             cache_info = self._cache.reject_unverified(request)
             attempts.append(_cache_attempt(cache_info, succeeded=False, code="cache_unverified"))
         return replace(
-            latest_evidence,
+            latest_blocking_evidence or latest_evidence,
             run_id=run_id,
             attempts=tuple(attempts),
             artifacts=(),
@@ -109,12 +154,17 @@ class EvidenceOrchestrator:
         )
 
 
-def _attempt(source: str, evidence: EvidenceBundle) -> EvidenceAttempt:
+def _attempt(
+    source: str,
+    evidence: EvidenceBundle,
+    *,
+    success_stage: str,
+) -> EvidenceAttempt:
     failure = evidence.failure
     if evidence.completeness == "complete" and evidence.segments and failure is None:
         return EvidenceAttempt(
             source=source,
-            stage="subtitles",
+            stage=success_stage,
             status=EvidenceAttemptStatus.SUCCEEDED,
             code=None,
             message=None,
@@ -158,6 +208,13 @@ _UNAVAILABLE_CODES = frozenset(
         "source_not_configured",
     }
 )
+
+
+def _fallback_is_allowed(attempts: list[EvidenceAttempt]) -> bool:
+    source_attempts = tuple(attempt for attempt in attempts if attempt.source != "cache")
+    return bool(source_attempts) and all(
+        attempt.status is EvidenceAttemptStatus.UNAVAILABLE for attempt in source_attempts
+    )
 
 
 YouTubeEvidenceOrchestrator = EvidenceOrchestrator

@@ -70,7 +70,7 @@ def test_current_bilibili_chrome_capture_enters_the_unified_evidence_contract(
 
     assert exit_code == 0
     document = json.loads(output_path.read_text(encoding="utf-8"))
-    assert document["schema_version"] == 2
+    assert document["schema_version"] == 3
     assert document["status"] == "complete"
     assert document["evidence"]["metadata"] == {
         "platform": "bilibili",

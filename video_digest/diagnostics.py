@@ -6,7 +6,8 @@ import re
 def sanitize_external_diagnostic(output: str) -> str | None:
     """Return a compact diagnostic that is safe to serialize or show to the user."""
 
-    sanitized = _WINDOWS_ABSOLUTE_PATH_PATTERN.sub("<redacted-path>", output)
+    sanitized = _QUOTED_WINDOWS_ABSOLUTE_PATH_PATTERN.sub("<redacted-path>", output)
+    sanitized = _WINDOWS_ABSOLUTE_PATH_PATTERN.sub("<redacted-path>", sanitized)
     sanitized = _URL_PATTERN.sub("<redacted-url>", sanitized)
     sanitized = _BEARER_PATTERN.sub(r"\1<redacted>", sanitized)
     sanitized = _BASIC_PATTERN.sub(r"\1<redacted>", sanitized)
@@ -20,6 +21,9 @@ def sanitize_external_diagnostic(output: str) -> str | None:
 
 
 _URL_PATTERN = re.compile(r"https?://[^\s]+", flags=re.IGNORECASE)
+_QUOTED_WINDOWS_ABSOLUTE_PATH_PATTERN = re.compile(
+    r"(?ix)(?:[\"'])[A-Z]:\\[^\"'\r\n]+(?:[\"'])",
+)
 _WINDOWS_ABSOLUTE_PATH_PATTERN = re.compile(
     r"(?ix)\b[A-Z]:\\(?:[^\\\r\n\t]+\\)*[^\\\r\n\t]*?"
     r"(?=\s+(?:cookie|set-cookie|authorization|bearer|basic)\b|[\r\n]|$)",

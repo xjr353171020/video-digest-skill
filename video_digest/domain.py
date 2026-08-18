@@ -28,6 +28,7 @@ class EvidenceCacheStatus(str, Enum):
     REVALIDATE = "revalidation_required"
     HIT = "hit"
     INVALID = "invalid"
+    BYPASSED = "bypassed"
     STORED = "stored"
 
 
@@ -113,6 +114,11 @@ class EvidenceBundle:
     transcript_is_generated: bool
     completeness: str
     media_downloaded: bool
+    media_kind: str | None = None
+    media_retained: bool | None = None
+    media_cleanup_status: str = "not_applicable"
+    media_locator: str | None = None
+    data_sent_to_cloud: bool = False
     failure: DigestFailure | None = None
     run_id: str | None = None
     attempts: tuple[EvidenceAttempt, ...] = ()
